@@ -24,7 +24,6 @@ async function sendTelegramNotification(message) {
     await axios.post(url, {
       chat_id: CONFIG.telegramChatId,
       text: message,
-      parse_mode: 'HTML',
       disable_web_page_preview: true,
     });
     console.log('✅ Telegram notification sent successfully');
@@ -178,35 +177,31 @@ function compareSnapshots(oldProducts, newProducts) {
   return { added, removed };
 }
 
-function formatNotification(added, removed) {
+function formatNotification(totalItems, added, removed, addedProducts) {
   const timestamp = new Date().toLocaleString('en-IN', { 
     timeZone: 'Asia/Kolkata',
-    dateStyle: 'medium',
-    timeStyle: 'short'
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
   });
   
-  let message = `🔔 <b>Shein Stock Update</b>\n`;
-  message += `📅 ${timestamp}\n\n`;
-  
-  if (added.length > 0) {
-    message += `✅ <b>${added.length} New Product(s) Added:</b>\n`;
-    added.slice(0, 5).forEach(id => {
-      message += `• <a href="https://sheinindia.in/p/${id}">Product ${id}</a>\n`;
+  let message = 
+`📦 SHEIN MEN STOCK UPDATE
+Total Items: ${totalItems}
+Added: ${added}
+Removed: ${removed}
+Updated: ${timestamp}`;
+
+  // Add clickable links for new products
+  if (addedProducts.length > 0) {
+    message += '\n\nNEW PRODUCTS:';
+    addedProducts.forEach(id => {
+      message += `\nhttps://sheinindia.in/p/${id}`;
     });
-    if (added.length > 5) {
-      message += `   ... and ${added.length - 5} more\n`;
-    }
-    message += `\n`;
-  }
-  
-  if (removed.length > 0) {
-    message += `❌ <b>${removed.length} Product(s) Removed:</b>\n`;
-    removed.slice(0, 5).forEach(id => {
-      message += `• Product ID: ${id}\n`;
-    });
-    if (removed.length > 5) {
-      message += `   ... and ${removed.length - 5} more\n`;
-    }
   }
   
   return message;
@@ -222,16 +217,14 @@ async function monitorStock() {
     const newProducts = await scrapeProducts();
     const { added, removed } = compareSnapshots(oldSnapshot.products, newProducts);
     
-    if (added.length > 0 || removed.length > 0) {
-      console.log(`\n📊 Changes detected:`);
-      console.log(`   ✅ Added: ${added.length}`);
-      console.log(`   ❌ Removed: ${removed.length}`);
-      
-      const message = formatNotification(added, removed);
-      await sendTelegramNotification(message);
-    } else {
-      console.log('✨ No changes detected - stock is stable');
-    }
+    console.log(`\n📊 Stock Status:`);
+    console.log(`   📦 Total Items: ${newProducts.size}`);
+    console.log(`   ✅ Added: ${added.length}`);
+    console.log(`   ❌ Removed: ${removed.length}`);
+    
+    // Always send notification every cycle with added products
+    const message = formatNotification(newProducts.size, added.length, removed.length, added);
+    await sendTelegramNotification(message);
     
     await saveSnapshot(newProducts);
     console.log('✅ Monitoring cycle completed successfully\n');
@@ -239,9 +232,7 @@ async function monitorStock() {
   } catch (error) {
     console.error('💥 Monitoring cycle failed:', error.message);
     await sendTelegramNotification(
-      `⚠️ <b>Shein Monitor Error</b>\n\n` +
-      `Failed to check stock: ${error.message}\n` +
-      `Time: ${new Date().toLocaleString('en-IN')}`
+      `⚠️ SHEIN MONITOR ERROR\nFailed to check stock: ${error.message}\nTime: ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`
     );
   }
 }
@@ -251,10 +242,7 @@ async function testSetup() {
   
   console.log('1️⃣ Testing Telegram connection...');
   await sendTelegramNotification(
-    `✅ <b>Shein Stock Monitor Active</b>\n\n` +
-    `Your bot is successfully configured and running!\n` +
-    `Monitoring: Shein India Men's SHEINVERSE Collection\n\n` +
-    `You'll receive notifications when stock changes.`
+    `✅ SHEIN STOCK MONITOR ACTIVE\n\nYour bot is successfully configured and running!\nMonitoring: Shein India Men's SHEINVERSE Collection\n\nYou'll receive notifications every 10 minutes.`
   );
   
   console.log('\n2️⃣ Running initial stock check...');
