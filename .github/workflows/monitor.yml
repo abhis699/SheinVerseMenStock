@@ -30,10 +30,11 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node monitor.js --test
       
-      - name: Commit updated snapshot
+      - name: Commit and push updated snapshot
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
+          git pull --rebase origin main
           git add stock.json
           git diff --quiet && git diff --staged --quiet || git commit -m "Update stock snapshot [skip ci]"
           git push
