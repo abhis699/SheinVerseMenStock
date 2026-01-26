@@ -2,144 +2,268 @@ require("dotenv").config();
 
 const puppeteer = require("puppeteer");
 const axios = require("axios");
+const fs = require("fs");
+const express = require("express");
 
-// ==================== CONFIGURATION ====================
+// ================= SAFETY =================
+
+process.on("unhandledRejection", async (err) => {
+  console.error("Unhandled Promise:", err);
+  await sendErrorAlert(err);
+});
+
+process.on("uncaughtException", async (err) => {
+  console.error("Uncaught Exception:", err);
+  await sendErrorAlert(err);
+});
+
+let isRunning = false;
+
+// ================= KEEP ALIVE SERVER =================
+
+const app = express();
+app.get("/", (req, res) => {
+  res.send("OK");
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log("✅ Keep-alive server running on port", PORT);
+});
+
+// ================= CONFIG =================
 
 const CONFIG = {
-  category: {
-    name: "MEN",
-    url: "https://sheinindia.in/sheinverse/c/sverse-5939-37961?query=%3Arelevance%3Agenderfilter%3AMen",
-  },
+  categories: [
+    {
+      key: "MEN_ALL",
+      label: "MEN (All Products)",
+      url: "https://sheinindia.in/sheinverse/c/sverse-5939-37961?query=%3Arelevance%3Agenderfilter%3AMen",
+    },
+    {
+      key: "MEN_FILTERED",
+      label: "MEN (L, XL, 28, 30, 32)",
+      url: "https://sheinindia.in/sheinverse/c/sverse-5939-37961?query=%3Arelevance%3Agenderfilter%3AMen%3Averticalsizegroupformat%3AL%3Averticalsizegroupformat%3AXL%3Averticalsizegroupformat%3A28%3Averticalsizegroupformat%3A30%3Averticalsizegroupformat%3A32&gridColumns=5",
+    },
+  ],
 
-  // ⚠️ Hard-coded because you chose not to use GitHub Secrets
-  telegramBotToken: "8421901165:AAHgAe2M0FzdCNt67dW9sjkTGHNtpQagIHA",
-  telegramChatId: "8282846997",
+  telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
+  telegramChatId: process.env.TELEGRAM_CHAT_ID,
+
+  snapshotFile: "stock.json",
 
   maxRetries: 2,
   retryDelay: 5000,
 };
 
-// ==================== TELEGRAM ====================
+// ================= TELEGRAM =================
 
-async function sendTelegramNotification(message) {
+async function sendTelegram(text) {
+  const url = `https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`;
+
+  await axios.post(url, {
+    chat_id: CONFIG.telegramChatId,
+    text,
+    disable_web_page_preview: true,
+  });
+
+  console.log("✅ Telegram sent");
+}
+
+// ================= ERROR ALERT =================
+
+async function sendErrorAlert(error) {
   try {
-    const url = `https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`;
-    await axios.post(url, {
-      chat_id: CONFIG.telegramChatId,
-      text: message,
-      disable_web_page_preview: true,
-    });
-    console.log("✅ Telegram notification sent");
-  } catch (error) {
-    console.error("❌ Telegram error:", error.message);
-    throw error;
+    const message = `🚨 BOT ERROR ALERT
+
+${error?.message || error}
+
+Time: ${new Date().toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+    })}`;
+
+    await sendTelegram(message);
+  } catch (err) {
+    console.error("Failed to send error alert:", err.message);
   }
 }
 
-// ==================== SCRAPER ====================
+// ================= SNAPSHOT =================
 
-async function scrapeStockCount(retryCount = 0) {
+function loadSnapshot() {
+  try {
+    if (!fs.existsSync(CONFIG.snapshotFile)) return {};
+    return JSON.parse(fs.readFileSync(CONFIG.snapshotFile, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function saveSnapshot(data) {
+  fs.writeFileSync(CONFIG.snapshotFile, JSON.stringify(data, null, 2));
+}
+
+// ================= SCRAPER =================
+
+async function scrapeCategory(category, retry = 0) {
   let browser;
 
   try {
-    console.log("🌐 Launching browser...");
-
     browser = await puppeteer.launch({
-      headless: "new",
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--single-process",
+        "--no-zygote",
+      ],
     });
 
     const page = await browser.newPage();
 
-    // Speed optimization
+    // Reduce bandwidth
     await page.setRequestInterception(true);
-    page.on("request", (request) => {
-      const type = request.resourceType();
-      if (["image", "font", "media", "stylesheet"].includes(type)) {
-        request.abort();
+    page.on("request", (req) => {
+      const type = req.resourceType();
+      if (
+        ["image", "font", "media", "stylesheet", "other"].includes(type)
+      ) {
+        req.abort();
       } else {
-        request.continue();
+        req.continue();
       }
     });
 
-    await page.setViewport({ width: 1920, height: 1080 });
+    await page.setViewport({ width: 1280, height: 800 });
 
-    console.log("📡 Opening MEN page...");
-    await page.goto(CONFIG.category.url, {
+    console.log(`🌐 Opening ${category.label}`);
+    await page.goto(category.url, {
       waitUntil: "domcontentloaded",
-      timeout: 90000,
+      timeout: 60000,
     });
 
-    console.log("⏳ Waiting for products...");
-    await new Promise((r) => setTimeout(r, 12000));
+    await page.waitForSelector(".item", { timeout: 20000 });
+    await new Promise((r) => setTimeout(r, 3000));
 
-    console.log("📜 Scrolling...");
-    await page.evaluate(async () => {
-      for (let i = 0; i < 8; i++) {
-        window.scrollBy(0, 600);
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-    });
+    const data = await page.evaluate(() => {
+      const countText =
+        document.querySelector(".length strong")?.innerText || "";
+      const totalItems = parseInt(
+        countText.match(/\d+/)?.[0] || "0"
+      );
 
-    const count = await page.evaluate(() => {
-      const ids = new Set();
-      const links = document.querySelectorAll('a[href*="/p/"]');
+      const firstProduct = document.querySelector(
+        ".item a.rilrtl-products-list__link"
+      );
 
-      links.forEach((link) => {
-        const match = link.href.match(/\/p\/(\d+)_/);
-        if (match) ids.add(match[1]);
-      });
-
-      return ids.size;
+      return {
+        totalItems,
+        productLink: firstProduct?.href || null,
+      };
     });
 
     await browser.close();
 
-    if (count === 0) {
-      throw new Error("No products detected");
-    }
+    if (!data.totalItems) throw new Error("No products detected");
 
-    console.log(`✅ MEN Stock Count: ${count}`);
-    return count;
-  } catch (error) {
+    return data;
+  } catch (err) {
     if (browser) await browser.close().catch(() => {});
-    console.error(`❌ Scrape error attempt ${retryCount + 1}:`, error.message);
+    console.error(`❌ ${category.key} scrape failed (${retry + 1})`);
 
-    if (retryCount < CONFIG.maxRetries) {
-      console.log(`🔄 Retrying in ${CONFIG.retryDelay / 1000}s...`);
+    if (retry < CONFIG.maxRetries) {
       await new Promise((r) => setTimeout(r, CONFIG.retryDelay));
-      return scrapeStockCount(retryCount + 1);
+      return scrapeCategory(category, retry + 1);
     }
 
-    throw error;
+    await sendErrorAlert(err);
+    throw err;
   }
 }
 
-// ==================== MAIN ====================
+// ================= DIFF =================
 
-async function main() {
-  console.log("🚀 SHEIN MEN STOCK MONITOR STARTED");
+function calculateDiff(oldCount, newCount) {
+  return {
+    added: Math.max(0, newCount - oldCount),
+    removed: Math.max(0, oldCount - newCount),
+  };
+}
+
+// ================= MAIN =================
+
+async function runOnce() {
+  if (isRunning) {
+    console.log("⏳ Previous run still active, skipping...");
+    return;
+  }
+
+  isRunning = true;
 
   try {
-    const count = await scrapeStockCount();
+    console.log("🚀 STOCK MONITOR RUN");
+
+    const snapshot = loadSnapshot();
+    const newSnapshot = {};
+    const sections = [];
+
+    for (const category of CONFIG.categories) {
+      const current = await scrapeCategory(category);
+      const previous = snapshot[category.key];
+
+      let added = 0;
+      let removed = 0;
+
+      if (previous?.totalItems !== undefined) {
+        const diff = calculateDiff(
+          previous.totalItems,
+          current.totalItems
+        );
+        added = diff.added;
+        removed = diff.removed;
+      }
+
+      newSnapshot[category.key] = {
+        totalItems: current.totalItems,
+        time: Date.now(),
+      };
+
+      sections.push(
+        `🔹 ${category.label}
+Total: ${current.totalItems}
+Added: +${added}
+Removed: -${removed}
+Sample: ${current.productLink || "N/A"}`
+      );
+    }
+
+    saveSnapshot(newSnapshot);
 
     const time = new Date().toLocaleString("en-IN", {
       timeZone: "Asia/Kolkata",
-      hour12: false,
     });
 
-    const message = `📦 SHEIN MEN STOCK
-Current Products: ${count}
-Time: ${time}`;
+    const message = `📦 SHEIN STOCK UPDATE
 
-    await sendTelegramNotification(message);
+${sections.join("\n\n")}
 
-    console.log("✅ Job completed successfully. Exiting.");
-    process.exit(0);
-  } catch (error) {
-    console.error("💥 Job failed:", error.message);
-    process.exit(1);
+Updated: ${time}`;
+
+    await sendTelegram(message);
+  } catch (err) {
+    console.error("Run failed:", err.message);
+    await sendErrorAlert(err);
+  } finally {
+    isRunning = false;
   }
 }
 
-main();
+// ================= SCHEDULER =================
+
+// Run immediately
+runOnce();
+
+// Run every 10 minutes
+setInterval(runOnce, 10 * 60 * 1000);
