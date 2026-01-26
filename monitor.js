@@ -109,9 +109,6 @@ async function scrapeCategory(category, retry = 0) {
   let browser;
 
   try {
-    const CHROME_PATH =
-  process.env.PUPPETEER_EXECUTABLE_PATH ||
-  "/opt/render/.cache/puppeteer/chrome/linux-144.0.7559.96/chrome-linux64/chrome";
 
 browser = await puppeteer.launch({
   headless: true,
