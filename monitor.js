@@ -289,4 +289,4 @@ Updated: ${time}`;
 runOnce();
 
 // Run every 10 minutes
-setInterval(runOnce, 10 * 60 * 1000);
+setInterval(runOnce, 5 * 60 * 1000);
