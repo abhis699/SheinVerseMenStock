@@ -11,8 +11,8 @@ const CONFIG = {
     name: "MEN",
     url: "https://sheinindia.in/sheinverse/c/sverse-5939-37961?query=%3Arelevance%3Agenderfilter%3AMen",
   },
-  telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
-  telegramChatId: process.env.TELEGRAM_CHAT_ID,
+  telegramBotToken:"8421901165:AAHgAe2M0FzdCNt67dW9sjkTGHNtpQagIHA",
+  telegramChatId:"8282846997",
   cronSchedule: "*/10 * * * *",
   maxRetries: 2,
   retryDelay: 5000,
@@ -149,10 +149,7 @@ Time: ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`
 // ==================== MAIN ====================
 
 async function main() {
-  if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) {
-    console.error("❌ Telegram credentials missing");
-    process.exit(1);
-  }
+
 
   console.log("🚀 SHEIN MEN STOCK MONITOR STARTED");
 
