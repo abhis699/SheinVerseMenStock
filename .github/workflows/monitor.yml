@@ -1,0 +1,17 @@
+name: SHEIN Monitor
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with: { node-version: 20 }
+    - run: npm ci
+    - run: |
+        echo "TELEGRAM_BOT_TOKEN=${{ secrets.BOT_TOKEN }}" >> .env
+        echo "TELEGRAM_CHAT_ID=${{ secrets.CHAT_ID }}" >> .env
+        node monitor.js
