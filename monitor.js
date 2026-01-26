@@ -54,6 +54,8 @@ const CONFIG = {
 
   maxRetries: 2,
   retryDelay: 5000,
+
+  maxLinksPerAlert: 10, // change if needed
 };
 
 // ================= TELEGRAM =================
@@ -109,20 +111,17 @@ async function scrapeCategory(category, retry = 0) {
   let browser;
 
   try {
-
-browser = await puppeteer.launch({
-  headless: true,
-  
-  args: [
-    "--no-sandbox",
-    "--disable-setuid-sandbox",
-    "--disable-dev-shm-usage",
-    "--disable-gpu",
-    "--single-process",
-    "--no-zygote",
-  ],
-});
-
+    browser = await puppeteer.launch({
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--single-process",
+        "--no-zygote",
+      ],
+    });
 
     const page = await browser.newPage();
 
@@ -157,13 +156,13 @@ browser = await puppeteer.launch({
         countText.match(/\d+/)?.[0] || "0"
       );
 
-      const firstProduct = document.querySelector(
-        ".item a.rilrtl-products-list__link"
-      );
+      const links = Array.from(
+        document.querySelectorAll(".item a.rilrtl-products-list__link")
+      ).map((a) => a.href);
 
       return {
         totalItems,
-        productLink: firstProduct?.href || null,
+        links,
       };
     });
 
@@ -218,6 +217,7 @@ async function runOnce() {
 
       let added = 0;
       let removed = 0;
+      let newLinks = [];
 
       if (previous?.totalItems !== undefined) {
         const diff = calculateDiff(
@@ -228,18 +228,38 @@ async function runOnce() {
         removed = diff.removed;
       }
 
+      // Detect new product links only for FILTERED category
+      if (category.key === "MEN_FILTERED" && previous?.links) {
+        const oldSet = new Set(previous.links);
+        newLinks = (current.links || []).filter(
+          (link) => !oldSet.has(link)
+        );
+      }
+
       newSnapshot[category.key] = {
         totalItems: current.totalItems,
+        links: current.links || [],
         time: Date.now(),
       };
 
-      sections.push(
-        `🔹 ${category.label}
+      let sectionText = `🔹 ${category.label}
 Total: ${current.totalItems}
 Added: +${added}
-Removed: -${removed}
-Sample: ${current.productLink || "N/A"}`
-      );
+Removed: -${removed}`;
+
+      if (
+        category.key === "MEN_FILTERED" &&
+        newLinks.length > 0
+      ) {
+        sectionText +=
+          "\n\n🆕 New Products:\n" +
+          newLinks
+            .slice(0, CONFIG.maxLinksPerAlert)
+            .map((l) => `• ${l}`)
+            .join("\n");
+      }
+
+      sections.push(sectionText);
     }
 
     saveSnapshot(newSnapshot);
