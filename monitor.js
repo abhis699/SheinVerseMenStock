@@ -1,7 +1,6 @@
 require("dotenv").config();
 
 const puppeteer = require("puppeteer");
-const cron = require("node-cron");
 const axios = require("axios");
 
 // ==================== CONFIGURATION ====================
@@ -11,9 +10,11 @@ const CONFIG = {
     name: "MEN",
     url: "https://sheinindia.in/sheinverse/c/sverse-5939-37961?query=%3Arelevance%3Agenderfilter%3AMen",
   },
-  telegramBotToken:"8421901165:AAHgAe2M0FzdCNt67dW9sjkTGHNtpQagIHA",
-  telegramChatId:"8282846997",
-  cronSchedule: "*/10 * * * *",
+
+  // ⚠️ Hard-coded because you chose not to use GitHub Secrets
+  telegramBotToken: "8421901165:AAHgAe2M0FzdCNt67dW9sjkTGHNtpQagIHA",
+  telegramChatId: "8282846997",
+
   maxRetries: 2,
   retryDelay: 5000,
 };
@@ -31,6 +32,7 @@ async function sendTelegramNotification(message) {
     console.log("✅ Telegram notification sent");
   } catch (error) {
     console.error("❌ Telegram error:", error.message);
+    throw error;
   }
 }
 
@@ -101,7 +103,6 @@ async function scrapeStockCount(retryCount = 0) {
     return count;
   } catch (error) {
     if (browser) await browser.close().catch(() => {});
-
     console.error(`❌ Scrape error attempt ${retryCount + 1}:`, error.message);
 
     if (retryCount < CONFIG.maxRetries) {
@@ -114,12 +115,10 @@ async function scrapeStockCount(retryCount = 0) {
   }
 }
 
-// ==================== MONITOR ====================
+// ==================== MAIN ====================
 
-async function monitorStock() {
-  console.log("\n========================================");
-  console.log("🚀 Checking SHEIN MEN Stock...");
-  console.log("========================================");
+async function main() {
+  console.log("🚀 SHEIN MEN STOCK MONITOR STARTED");
 
   try {
     const count = await scrapeStockCount();
@@ -134,29 +133,13 @@ Current Products: ${count}
 Time: ${time}`;
 
     await sendTelegramNotification(message);
-    console.log("✅ Stock update sent\n");
+
+    console.log("✅ Job completed successfully. Exiting.");
+    process.exit(0);
   } catch (error) {
-    console.error("💥 Monitor failed:", error.message);
-
-    await sendTelegramNotification(
-      `⚠️ SHEIN MONITOR ERROR
-${error.message}
-Time: ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`
-    );
+    console.error("💥 Job failed:", error.message);
+    process.exit(1);
   }
-}
-
-// ==================== MAIN ====================
-
-async function main() {
-
-
-  console.log("🚀 SHEIN MEN STOCK MONITOR STARTED");
-
-  await monitorStock();
-
-  console.log(`⏰ Running every 10 minutes...\n`);
-  cron.schedule(CONFIG.cronSchedule, monitorStock);
 }
 
 main();
