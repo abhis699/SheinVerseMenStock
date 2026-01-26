@@ -7,16 +7,10 @@ const axios = require("axios");
 // ==================== CONFIGURATION ====================
 
 const CONFIG = {
-  categories: [
-    {
-      name: "MEN",
-      url: "https://sheinindia.in/sheinverse/c/sverse-5939-37961?query=%3Arelevance%3Agenderfilter%3AMen",
-    },
-    {
-      name: "WOMEN",
-      url: "https://www.sheinindia.in/c/sverse-5939-37961?query=%3Arelevance%3Agenderfilter%3AWomen",
-    },
-  ],
+  category: {
+    name: "MEN",
+    url: "https://sheinindia.in/sheinverse/c/sverse-5939-37961?query=%3Arelevance%3Agenderfilter%3AMen",
+  },
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
   telegramChatId: process.env.TELEGRAM_CHAT_ID,
   cronSchedule: "*/10 * * * *",
@@ -42,11 +36,11 @@ async function sendTelegramNotification(message) {
 
 // ==================== SCRAPER ====================
 
-async function scrapeStockCount(category, retryCount = 0) {
+async function scrapeStockCount(retryCount = 0) {
   let browser;
 
   try {
-    console.log(`🌐 Launching browser for ${category.name}...`);
+    console.log("🌐 Launching browser...");
 
     browser = await puppeteer.launch({
       headless: "new",
@@ -68,8 +62,8 @@ async function scrapeStockCount(category, retryCount = 0) {
 
     await page.setViewport({ width: 1920, height: 1080 });
 
-    console.log(`📡 Opening ${category.name} page...`);
-    await page.goto(category.url, {
+    console.log("📡 Opening MEN page...");
+    await page.goto(CONFIG.category.url, {
       waitUntil: "domcontentloaded",
       timeout: 90000,
     });
@@ -77,7 +71,7 @@ async function scrapeStockCount(category, retryCount = 0) {
     console.log("⏳ Waiting for products...");
     await new Promise((r) => setTimeout(r, 12000));
 
-    console.log("📜 Scrolling to load products...");
+    console.log("📜 Scrolling...");
     await page.evaluate(async () => {
       for (let i = 0; i < 8; i++) {
         window.scrollBy(0, 600);
@@ -100,25 +94,20 @@ async function scrapeStockCount(category, retryCount = 0) {
     await browser.close();
 
     if (count === 0) {
-      throw new Error(`No products detected for ${category.name}`);
+      throw new Error("No products detected");
     }
 
-    console.log(`✅ ${category.name} Stock Count: ${count}`);
+    console.log(`✅ MEN Stock Count: ${count}`);
     return count;
   } catch (error) {
     if (browser) await browser.close().catch(() => {});
 
-    console.error(
-      `❌ Scrape error for ${category.name} (attempt ${
-        retryCount + 1
-      }):`,
-      error.message
-    );
+    console.error(`❌ Scrape error attempt ${retryCount + 1}:`, error.message);
 
     if (retryCount < CONFIG.maxRetries) {
       console.log(`🔄 Retrying in ${CONFIG.retryDelay / 1000}s...`);
       await new Promise((r) => setTimeout(r, CONFIG.retryDelay));
-      return scrapeStockCount(category, retryCount + 1);
+      return scrapeStockCount(retryCount + 1);
     }
 
     throw error;
@@ -129,24 +118,20 @@ async function scrapeStockCount(category, retryCount = 0) {
 
 async function monitorStock() {
   console.log("\n========================================");
-  console.log("🚀 Checking SHEIN Stock Count...");
+  console.log("🚀 Checking SHEIN MEN Stock...");
   console.log("========================================");
 
   try {
-    let message = "📦 SHEIN STOCK COUNT\n\n";
-
-    for (const category of CONFIG.categories) {
-      console.log(`🔎 Checking ${category.name}...`);
-      const count = await scrapeStockCount(category);
-      message += `${category.name}: ${count} products\n`;
-    }
+    const count = await scrapeStockCount();
 
     const time = new Date().toLocaleString("en-IN", {
       timeZone: "Asia/Kolkata",
       hour12: false,
     });
 
-    message += `\nTime: ${time}`;
+    const message = `📦 SHEIN MEN STOCK
+Current Products: ${count}
+Time: ${time}`;
 
     await sendTelegramNotification(message);
     console.log("✅ Stock update sent\n");
@@ -169,7 +154,7 @@ async function main() {
     process.exit(1);
   }
 
-  console.log("🚀 SHEIN STOCK MONITOR STARTED");
+  console.log("🚀 SHEIN MEN STOCK MONITOR STARTED");
 
   await monitorStock();
 
