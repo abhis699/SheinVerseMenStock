@@ -112,7 +112,7 @@ async function scrapeCategory(category, retry = 0) {
 
 browser = await puppeteer.launch({
   headless: true,
-  executablePath: CHROME_PATH,
+  
   args: [
     "--no-sandbox",
     "--disable-setuid-sandbox",
