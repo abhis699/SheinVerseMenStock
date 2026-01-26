@@ -109,17 +109,23 @@ async function scrapeCategory(category, retry = 0) {
   let browser;
 
   try {
-    browser = await puppeteer.launch({
-      headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--single-process",
-        "--no-zygote",
-      ],
-    });
+    const CHROME_PATH =
+  process.env.PUPPETEER_EXECUTABLE_PATH ||
+  "/opt/render/.cache/puppeteer/chrome/linux-144.0.7559.96/chrome-linux64/chrome";
+
+browser = await puppeteer.launch({
+  headless: true,
+  executablePath: CHROME_PATH,
+  args: [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--single-process",
+    "--no-zygote",
+  ],
+});
+
 
     const page = await browser.newPage();
 
