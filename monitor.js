@@ -298,6 +298,4 @@ Updated: ${time}`;
 
 // Run immediately
 runOnce();
-
-// Run every 5 minutes
 setInterval(runOnce, 5 * 60 * 1000);
