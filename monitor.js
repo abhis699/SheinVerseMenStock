@@ -301,4 +301,5 @@ Updated: ${time}`;
 // ================= SCHEDULER =================
 
 runOnce();
-setInterval(runOnce, 6 * 60 * 1000);   // ⏳ Reduced load for stability
+
+setInterval(runOnce, 6 * 60 * 1000);  
