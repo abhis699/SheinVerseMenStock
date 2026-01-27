@@ -42,9 +42,11 @@ const CONFIG = {
   maxRetries: 2,
   retryDelay: 5000,
 
-  normalUpdateLinks: 10,   // 🔗 Links in normal update
-  alertThreshold: 30,     // 🚨 Alert when filtered >= 30
-  alertLinksCount: 15,    // 🔗 Links in alert
+  normalUpdateLinks: 10,
+  alertThreshold: 30,
+  alertLinksCount: 15,
+
+  scrapeCooldownMs: 4000,   // 🧠 cooldown between browser launches
 };
 
 // ================= TELEGRAM (AUTO SPLIT SAFE) =================
@@ -94,17 +96,19 @@ async function scrapeCategory(category, retry = 0) {
   try {
     browser = await puppeteer.launch({
       headless: "new",
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+      ],
     });
 
     const page = await browser.newPage();
 
-    // Real browser fingerprint
     await page.setUserAgent(
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
     );
 
-    // Reduce bandwidth
     await page.setRequestInterception(true);
     page.on("request", (req) => {
       const type = req.resourceType();
@@ -115,20 +119,19 @@ async function scrapeCategory(category, retry = 0) {
       }
     });
 
-    await page.setViewport({ width: 1280, height: 800 });
+    await page.setViewport({ width: 1200, height: 720 });
 
     console.log(`🌐 Opening ${category.label}`);
     await page.goto(category.url, {
       waitUntil: "domcontentloaded",
-      timeout: 120000,
+      timeout: 90000,
     });
 
-    // Safer selector
     await page.waitForSelector("a.rilrtl-products-list__link", {
-      timeout: 60000,
+      timeout: 45000,
     });
 
-    await new Promise((r) => setTimeout(r, 6000));
+    await new Promise((r) => setTimeout(r, 3000));
 
     const data = await page.evaluate(() => {
       const countText =
@@ -188,11 +191,23 @@ async function runOnce() {
   let filteredLinks = [];
   let filteredTotal = 0;
 
-  // ================= PARALLEL SAFE SCRAPE =================
+  // ================= SEQUENTIAL SCRAPE =================
 
-  const results = await Promise.allSettled(
-    CONFIG.categories.map((cat) => scrapeCategory(cat))
-  );
+  const results = [];
+
+  for (const category of CONFIG.categories) {
+    try {
+      const data = await scrapeCategory(category);
+      results.push({ status: "fulfilled", value: data });
+    } catch (err) {
+      results.push({ status: "rejected", reason: err });
+    }
+
+    // Allow memory to settle
+    await new Promise((r) =>
+      setTimeout(r, CONFIG.scrapeCooldownMs)
+    );
+  }
 
   CONFIG.categories.forEach((category, index) => {
     const result = results[index];
@@ -301,5 +316,4 @@ Updated: ${time}`;
 // ================= SCHEDULER =================
 
 runOnce();
-
-setInterval(runOnce, 6 * 60 * 1000);  
+setInterval(runOnce, 6 * 60 * 1000);   // ⏳ every 6 minutes
