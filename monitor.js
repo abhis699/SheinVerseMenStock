@@ -43,8 +43,8 @@ const CONFIG = {
   retryDelay: 5000,
 
   normalUpdateLinks: 10,   // 🔗 Links in normal update
-  maxFilteredLinks: 30,    // 🚨 Links in BIG ALERT
-  filteredThreshold: 30,  // 🚨 Alert trigger
+  alertThreshold: 30,     // 🚨 Alert when filtered >= 30
+  alertLinksCount: 15,    // 🔗 Links in alert
 };
 
 // ================= TELEGRAM (AUTO SPLIT SAFE) =================
@@ -65,10 +65,10 @@ async function sendTelegram(text) {
       disable_web_page_preview: true,
     });
 
-    await new Promise((r) => setTimeout(r, 400));
+    await new Promise((r) => setTimeout(r, 300));
   }
 
-  console.log("✅ Telegram sent (split-safe)");
+  console.log("✅ Telegram sent");
 }
 
 // ================= SNAPSHOT =================
@@ -86,19 +86,6 @@ function saveSnapshot(data) {
   fs.writeFileSync(CONFIG.snapshotFile, JSON.stringify(data, null, 2));
 }
 
-// ================= NEWEST SORT HELPERS =================
-
-function getProductIdFromLink(link) {
-  const match = link.match(/(\d{8,})/);
-  return match ? Number(match[1]) : 0;
-}
-
-function sortNewestFirst(links = []) {
-  return [...links].sort(
-    (a, b) => getProductIdFromLink(b) - getProductIdFromLink(a)
-  );
-}
-
 // ================= SCRAPER =================
 
 async function scrapeCategory(category, retry = 0) {
@@ -112,6 +99,12 @@ async function scrapeCategory(category, retry = 0) {
 
     const page = await browser.newPage();
 
+    // Real browser fingerprint
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+    );
+
+    // Reduce bandwidth
     await page.setRequestInterception(true);
     page.on("request", (req) => {
       const type = req.resourceType();
@@ -127,11 +120,15 @@ async function scrapeCategory(category, retry = 0) {
     console.log(`🌐 Opening ${category.label}`);
     await page.goto(category.url, {
       waitUntil: "domcontentloaded",
+      timeout: 120000,
+    });
+
+    // Safer selector
+    await page.waitForSelector("a.rilrtl-products-list__link", {
       timeout: 60000,
     });
 
-    await page.waitForSelector(".item", { timeout: 20000 });
-    await new Promise((r) => setTimeout(r, 3000));
+    await new Promise((r) => setTimeout(r, 6000));
 
     const data = await page.evaluate(() => {
       const countText =
@@ -141,7 +138,7 @@ async function scrapeCategory(category, retry = 0) {
       );
 
       const links = Array.from(
-        document.querySelectorAll(".item a.rilrtl-products-list__link")
+        document.querySelectorAll("a.rilrtl-products-list__link")
       ).map((a) => a.href);
 
       return { totalItems, links };
@@ -154,7 +151,10 @@ async function scrapeCategory(category, retry = 0) {
     return data;
   } catch (err) {
     if (browser) await browser.close().catch(() => {});
-    console.error(`❌ ${category.key} scrape failed (${retry + 1})`);
+    console.error(
+      `❌ ${category.key} scrape failed (${retry + 1}):`,
+      err.message
+    );
 
     if (retry < CONFIG.maxRetries) {
       await new Promise((r) => setTimeout(r, CONFIG.retryDelay));
@@ -188,14 +188,21 @@ async function runOnce() {
   let filteredLinks = [];
   let filteredTotal = 0;
 
-  // ================= PARALLEL SCRAPE =================
+  // ================= PARALLEL SAFE SCRAPE =================
 
-  const results = await Promise.all(
+  const results = await Promise.allSettled(
     CONFIG.categories.map((cat) => scrapeCategory(cat))
   );
 
   CONFIG.categories.forEach((category, index) => {
-    const current = results[index];
+    const result = results[index];
+
+    if (result.status !== "fulfilled") {
+      console.error(`❌ ${category.key} failed this cycle`);
+      return;
+    }
+
+    const current = result.value;
     const previous = snapshot[category.key];
 
     let added = 0;
@@ -224,7 +231,7 @@ Removed: -${removed}`;
     }
 
     if (category.key === "MEN_FILTERED") {
-      filteredLinks = sortNewestFirst(current.links || []);
+      filteredLinks = current.links || [];
       filteredTotal = current.totalItems;
 
       filteredSection = `2️⃣ MEN (Filtered)
@@ -234,27 +241,27 @@ Removed: -${removed}`;
     }
   });
 
-  // ================= 🚨 THRESHOLD ALERT =================
+  // ================= 🚨 ALERT =================
 
   const previousFiltered = snapshot?.MEN_FILTERED?.totalItems || 0;
 
   const crossedUp =
-    previousFiltered < CONFIG.filteredThreshold &&
-    filteredTotal >= CONFIG.filteredThreshold;
+    previousFiltered < CONFIG.alertThreshold &&
+    filteredTotal >= CONFIG.alertThreshold;
 
   if (crossedUp) {
     const alertLinks = filteredLinks
-      .slice(0, CONFIG.maxFilteredLinks)
+      .slice(0, CONFIG.alertLinksCount)
       .map((l) => `• ${l}`)
       .join("\n");
 
-    const alertMsg = `🚨🚨🚨 BIG STOCK ALERT 🚨🚨🚨
+    const alertMsg = `🚨🚨🚨 FILTERED STOCK ALERT 🚨🚨🚨
 
-🔥 MEN FILTERED STOCK CROSSED ${CONFIG.filteredThreshold}+ 🔥
+MEN Filtered stock crossed ${CONFIG.alertThreshold}+
 
 Current Stock: ${filteredTotal}
 
-🛒 TOP ${CONFIG.maxFilteredLinks} NEWEST PRODUCTS:
+🔥 Top ${CONFIG.alertLinksCount} Products:
 ${alertLinks || "No links found"}
 
 ⏰ ${new Date().toLocaleString("en-IN", {
@@ -283,7 +290,7 @@ ${menSection}
 
 ${filteredSection}
 
-🔗 TOP ${CONFIG.normalUpdateLinks} NEWEST FILTERED LINKS IS HERE:
+🔗 Top ${CONFIG.normalUpdateLinks} Filtered Links:
 ${normalLinks || "No links found"}
 
 Updated: ${time}`;
@@ -294,4 +301,4 @@ Updated: ${time}`;
 // ================= SCHEDULER =================
 
 runOnce();
-setInterval(runOnce, 5 * 60 * 1000);
+setInterval(runOnce, 6 * 60 * 1000);   // ⏳ Reduced load for stability
