@@ -42,23 +42,33 @@ const CONFIG = {
   maxRetries: 2,
   retryDelay: 5000,
 
-  maxFilteredLinks: 10,   // show top 10 filtered links
-  maxPincodeChecks: 12,   // safety limit per category
-  pincode: "110096",      // 🔴 change to your pincode
+  normalUpdateLinks: 10,   // 🔗 Links in normal update
+  maxFilteredLinks: 30,    // 🚨 Links in BIG ALERT
+  filteredThreshold: 30,  // 🚨 Alert trigger
 };
 
-// ================= TELEGRAM =================
+// ================= TELEGRAM (AUTO SPLIT SAFE) =================
 
 async function sendTelegram(text) {
   const url = `https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`;
+  const MAX_LEN = 3800;
 
-  await axios.post(url, {
-    chat_id: CONFIG.telegramChatId,
-    text,
-    disable_web_page_preview: true,
-  });
+  const chunks = [];
+  for (let i = 0; i < text.length; i += MAX_LEN) {
+    chunks.push(text.slice(i, i + MAX_LEN));
+  }
 
-  console.log("✅ Telegram sent");
+  for (const chunk of chunks) {
+    await axios.post(url, {
+      chat_id: CONFIG.telegramChatId,
+      text: chunk,
+      disable_web_page_preview: true,
+    });
+
+    await new Promise((r) => setTimeout(r, 400));
+  }
+
+  console.log("✅ Telegram sent (split-safe)");
 }
 
 // ================= SNAPSHOT =================
@@ -76,53 +86,17 @@ function saveSnapshot(data) {
   fs.writeFileSync(CONFIG.snapshotFile, JSON.stringify(data, null, 2));
 }
 
-// ================= PINCODE HELPERS =================
+// ================= NEWEST SORT HELPERS =================
 
-// Extract numeric product code from URL
-function extractProductCode(url) {
-  if (!url) return null;
-  const match = url.match(/(\d{8,})/);
-  return match ? match[1] : null;
+function getProductIdFromLink(link) {
+  const match = link.match(/(\d{8,})/);
+  return match ? Number(match[1]) : 0;
 }
 
-// Call SHEIN delivery API
-async function checkPincodeAvailability(productCode) {
-  try {
-    const res = await axios.get(
-      "https://www.sheinindia.in/api/edd/checkDeliveryDetails",
-      {
-        params: {
-          productCode,
-          postalCode: CONFIG.pincode,
-          quantity: 1,
-          IsExchange: false,
-        },
-        timeout: 15000,
-      }
-    );
-    return res.data;
-  } catch (err) {
-    console.error("❌ Pincode API failed:", productCode);
-    return null;
-  }
-}
-
-// Decide deliverable or not
-function isDeliverable(apiData) {
-  if (!apiData) return false;
-
-  if (typeof apiData.servicability === "boolean") {
-    return apiData.servicability === true;
-  }
-
-  if (
-    Array.isArray(apiData.productDetails) &&
-    apiData.productDetails.length > 0
-  ) {
-    return apiData.productDetails[0].servicability === true;
-  }
-
-  return false;
+function sortNewestFirst(links = []) {
+  return [...links].sort(
+    (a, b) => getProductIdFromLink(b) - getProductIdFromLink(a)
+  );
 }
 
 // ================= SCRAPER =================
@@ -138,7 +112,6 @@ async function scrapeCategory(category, retry = 0) {
 
     const page = await browser.newPage();
 
-    // Reduce bandwidth
     await page.setRequestInterception(true);
     page.on("request", (req) => {
       const type = req.resourceType();
@@ -211,13 +184,18 @@ async function runOnce() {
 
   let menSection = "";
   let filteredSection = "";
-  let pincodeSection = "";
 
-  let menAllLinks = [];
   let filteredLinks = [];
+  let filteredTotal = 0;
 
-  for (const category of CONFIG.categories) {
-    const current = await scrapeCategory(category);
+  // ================= PARALLEL SCRAPE =================
+
+  const results = await Promise.all(
+    CONFIG.categories.map((cat) => scrapeCategory(cat))
+  );
+
+  CONFIG.categories.forEach((category, index) => {
+    const current = results[index];
     const previous = snapshot[category.key];
 
     let added = 0;
@@ -238,87 +216,62 @@ async function runOnce() {
       time: Date.now(),
     };
 
-    // -------- MEN ALL --------
     if (category.key === "MEN_ALL") {
-      menAllLinks = current.links || [];
       menSection = `1️⃣ MEN (All Products)
 Total: ${current.totalItems}
 Added: +${added}
 Removed: -${removed}`;
     }
 
-    // -------- MEN FILTERED --------
     if (category.key === "MEN_FILTERED") {
-      filteredLinks = current.links || [];
-
-      const topLinks = filteredLinks
-        .slice(0, CONFIG.maxFilteredLinks)
-        .map((l) => `• ${l}`)
-        .join("\n");
+      filteredLinks = sortNewestFirst(current.links || []);
+      filteredTotal = current.totalItems;
 
       filteredSection = `2️⃣ MEN (Filtered)
 Total: ${current.totalItems}
 Added: +${added}
-Removed: -${removed}
-
-🔗 Top ${CONFIG.maxFilteredLinks} Links:
-${topLinks || "No links found"}`;
+Removed: -${removed}`;
     }
+  });
+
+  // ================= 🚨 THRESHOLD ALERT =================
+
+  const previousFiltered = snapshot?.MEN_FILTERED?.totalItems || 0;
+
+  const crossedUp =
+    previousFiltered < CONFIG.filteredThreshold &&
+    filteredTotal >= CONFIG.filteredThreshold;
+
+  if (crossedUp) {
+    const alertLinks = filteredLinks
+      .slice(0, CONFIG.maxFilteredLinks)
+      .map((l) => `• ${l}`)
+      .join("\n");
+
+    const alertMsg = `🚨🚨🚨 BIG STOCK ALERT 🚨🚨🚨
+
+🔥 MEN FILTERED STOCK CROSSED ${CONFIG.filteredThreshold}+ 🔥
+
+Current Stock: ${filteredTotal}
+
+🛒 TOP ${CONFIG.maxFilteredLinks} NEWEST PRODUCTS:
+${alertLinks || "No links found"}
+
+⏰ ${new Date().toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+    })}`;
+
+    await sendTelegram(alertMsg);
   }
-
-  // ================= PINCODE DELIVERABLE =================
-
-  const deliverableLinks = [];
-
-  // ---- First try FILTERED ----
-  for (
-    let i = 0;
-    i < Math.min(filteredLinks.length, CONFIG.maxPincodeChecks);
-    i++
-  ) {
-    const link = filteredLinks[i];
-    const productCode = extractProductCode(link);
-    if (!productCode) continue;
-
-    const apiData = await checkPincodeAvailability(productCode);
-    if (isDeliverable(apiData)) {
-      deliverableLinks.push(link);
-    }
-
-    await new Promise((r) => setTimeout(r, 300));
-  }
-
-  // ---- Fallback: if none deliverable, try MEN_ALL ----
-  if (deliverableLinks.length === 0) {
-    console.log("⚠️ No deliverable filtered products, checking MEN_ALL...");
-
-    for (
-      let i = 0;
-      i < Math.min(menAllLinks.length, CONFIG.maxPincodeChecks);
-      i++
-    ) {
-      const link = menAllLinks[i];
-      const productCode = extractProductCode(link);
-      if (!productCode) continue;
-
-      const apiData = await checkPincodeAvailability(productCode);
-      if (isDeliverable(apiData)) {
-        deliverableLinks.push(link);
-      }
-
-      await new Promise((r) => setTimeout(r, 300));
-    }
-  }
-
-  pincodeSection = `3️⃣ PINCODE DELIVERABLE PRODUCTS (Pincode: ${CONFIG.pincode})
-
-${
-  deliverableLinks.length > 0
-    ? deliverableLinks.map((l) => `• ${l}`).join("\n")
-    : "❌ No deliverable products found on site"
-}`;
 
   saveSnapshot(newSnapshot);
+
+  // ================= NORMAL UPDATE =================
+
+  const normalLinks = filteredLinks
+    .slice(0, CONFIG.normalUpdateLinks)
+    .map((l) => `• ${l}`)
+    .join("\n");
 
   const time = new Date().toLocaleString("en-IN", {
     timeZone: "Asia/Kolkata",
@@ -330,7 +283,8 @@ ${menSection}
 
 ${filteredSection}
 
-${pincodeSection}
+🔗 TOP ${CONFIG.normalUpdateLinks} NEWEST FILTERED LINKS IS HERE:
+${normalLinks || "No links found"}
 
 Updated: ${time}`;
 
@@ -339,8 +293,5 @@ Updated: ${time}`;
 
 // ================= SCHEDULER =================
 
-// Run immediately
 runOnce();
-
-// Run every 5 minutes
 setInterval(runOnce, 5 * 60 * 1000);
