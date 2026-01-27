@@ -3,6 +3,20 @@ require("dotenv").config();
 const puppeteer = require("puppeteer");
 const axios = require("axios");
 const fs = require("fs");
+const express = require("express");
+
+// ================= KEEP ALIVE SERVER =================
+
+const app = express();
+const PORT = process.env.PORT || 10000;
+
+app.get("/", (req, res) => {
+  res.send("Shein Stock Bot Running");
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log("✅ Keep-alive server running on port", PORT);
+});
 
 // ================= CONFIG =================
 
@@ -28,8 +42,9 @@ const CONFIG = {
   maxRetries: 2,
   retryDelay: 5000,
 
-  maxFilteredLinks: 10,     // Top 10 links in section 2
-  pincode: "110096",        // 🔴 Change to your pincode
+  maxFilteredLinks: 10,   // show top 10 filtered links
+  maxPincodeChecks: 12,   // safety limit per category
+  pincode: "110096",      // 🔴 change to your pincode
 };
 
 // ================= TELEGRAM =================
@@ -66,7 +81,7 @@ function saveSnapshot(data) {
 // Extract numeric product code from URL
 function extractProductCode(url) {
   if (!url) return null;
-  const match = url.match(/(\d{8,})/); // long numeric id
+  const match = url.match(/(\d{8,})/);
   return match ? match[1] : null;
 }
 
@@ -198,6 +213,7 @@ async function runOnce() {
   let filteredSection = "";
   let pincodeSection = "";
 
+  let menAllLinks = [];
   let filteredLinks = [];
 
   for (const category of CONFIG.categories) {
@@ -224,6 +240,7 @@ async function runOnce() {
 
     // -------- MEN ALL --------
     if (category.key === "MEN_ALL") {
+      menAllLinks = current.links || [];
       menSection = `1️⃣ MEN (All Products)
 Total: ${current.totalItems}
 Added: +${added}
@@ -253,18 +270,44 @@ ${topLinks || "No links found"}`;
 
   const deliverableLinks = [];
 
-  for (const link of filteredLinks) {
+  // ---- First try FILTERED ----
+  for (
+    let i = 0;
+    i < Math.min(filteredLinks.length, CONFIG.maxPincodeChecks);
+    i++
+  ) {
+    const link = filteredLinks[i];
     const productCode = extractProductCode(link);
     if (!productCode) continue;
 
     const apiData = await checkPincodeAvailability(productCode);
-
     if (isDeliverable(apiData)) {
       deliverableLinks.push(link);
     }
 
-    // small delay to avoid hammering API
     await new Promise((r) => setTimeout(r, 300));
+  }
+
+  // ---- Fallback: if none deliverable, try MEN_ALL ----
+  if (deliverableLinks.length === 0) {
+    console.log("⚠️ No deliverable filtered products, checking MEN_ALL...");
+
+    for (
+      let i = 0;
+      i < Math.min(menAllLinks.length, CONFIG.maxPincodeChecks);
+      i++
+    ) {
+      const link = menAllLinks[i];
+      const productCode = extractProductCode(link);
+      if (!productCode) continue;
+
+      const apiData = await checkPincodeAvailability(productCode);
+      if (isDeliverable(apiData)) {
+        deliverableLinks.push(link);
+      }
+
+      await new Promise((r) => setTimeout(r, 300));
+    }
   }
 
   pincodeSection = `3️⃣ PINCODE DELIVERABLE PRODUCTS (Pincode: ${CONFIG.pincode})
@@ -272,7 +315,7 @@ ${topLinks || "No links found"}`;
 ${
   deliverableLinks.length > 0
     ? deliverableLinks.map((l) => `• ${l}`).join("\n")
-    : "❌ No deliverable products found"
+    : "❌ No deliverable products found on site"
 }`;
 
   saveSnapshot(newSnapshot);
@@ -298,4 +341,6 @@ Updated: ${time}`;
 
 // Run immediately
 runOnce();
+
+// Run every 5 minutes
 setInterval(runOnce, 5 * 60 * 1000);
