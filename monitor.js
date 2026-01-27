@@ -3,33 +3,6 @@ require("dotenv").config();
 const puppeteer = require("puppeteer");
 const axios = require("axios");
 const fs = require("fs");
-const express = require("express");
-
-// ================= SAFETY =================
-
-process.on("unhandledRejection", async (err) => {
-  console.error("Unhandled Promise:", err);
-  await sendErrorAlert(err);
-});
-
-process.on("uncaughtException", async (err) => {
-  console.error("Uncaught Exception:", err);
-  await sendErrorAlert(err);
-});
-
-let isRunning = false;
-
-// ================= KEEP ALIVE SERVER =================
-
-const app = express();
-app.get("/", (req, res) => {
-  res.send("OK");
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("✅ Keep-alive server running on port", PORT);
-});
 
 // ================= CONFIG =================
 
@@ -55,7 +28,8 @@ const CONFIG = {
   maxRetries: 2,
   retryDelay: 5000,
 
-  maxLinksPerAlert: 10, // change if needed
+  maxFilteredLinks: 10,     // Top 10 links in section 2
+  pincode: "110096",        // 🔴 Change to your pincode
 };
 
 // ================= TELEGRAM =================
@@ -70,24 +44,6 @@ async function sendTelegram(text) {
   });
 
   console.log("✅ Telegram sent");
-}
-
-// ================= ERROR ALERT =================
-
-async function sendErrorAlert(error) {
-  try {
-    const message = `🚨 BOT ERROR ALERT
-
-${error?.message || error}
-
-Time: ${new Date().toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata",
-    })}`;
-
-    await sendTelegram(message);
-  } catch (err) {
-    console.error("Failed to send error alert:", err.message);
-  }
 }
 
 // ================= SNAPSHOT =================
@@ -105,6 +61,55 @@ function saveSnapshot(data) {
   fs.writeFileSync(CONFIG.snapshotFile, JSON.stringify(data, null, 2));
 }
 
+// ================= PINCODE HELPERS =================
+
+// Extract numeric product code from URL
+function extractProductCode(url) {
+  if (!url) return null;
+  const match = url.match(/(\d{8,})/); // long numeric id
+  return match ? match[1] : null;
+}
+
+// Call SHEIN delivery API
+async function checkPincodeAvailability(productCode) {
+  try {
+    const res = await axios.get(
+      "https://www.sheinindia.in/api/edd/checkDeliveryDetails",
+      {
+        params: {
+          productCode,
+          postalCode: CONFIG.pincode,
+          quantity: 1,
+          IsExchange: false,
+        },
+        timeout: 15000,
+      }
+    );
+    return res.data;
+  } catch (err) {
+    console.error("❌ Pincode API failed:", productCode);
+    return null;
+  }
+}
+
+// Decide deliverable or not
+function isDeliverable(apiData) {
+  if (!apiData) return false;
+
+  if (typeof apiData.servicability === "boolean") {
+    return apiData.servicability === true;
+  }
+
+  if (
+    Array.isArray(apiData.productDetails) &&
+    apiData.productDetails.length > 0
+  ) {
+    return apiData.productDetails[0].servicability === true;
+  }
+
+  return false;
+}
+
 // ================= SCRAPER =================
 
 async function scrapeCategory(category, retry = 0) {
@@ -112,15 +117,8 @@ async function scrapeCategory(category, retry = 0) {
 
   try {
     browser = await puppeteer.launch({
-      headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--single-process",
-        "--no-zygote",
-      ],
+      headless: "new",
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
     });
 
     const page = await browser.newPage();
@@ -129,9 +127,7 @@ async function scrapeCategory(category, retry = 0) {
     await page.setRequestInterception(true);
     page.on("request", (req) => {
       const type = req.resourceType();
-      if (
-        ["image", "font", "media", "stylesheet", "other"].includes(type)
-      ) {
+      if (["image", "font", "media", "stylesheet"].includes(type)) {
         req.abort();
       } else {
         req.continue();
@@ -160,10 +156,7 @@ async function scrapeCategory(category, retry = 0) {
         document.querySelectorAll(".item a.rilrtl-products-list__link")
       ).map((a) => a.href);
 
-      return {
-        totalItems,
-        links,
-      };
+      return { totalItems, links };
     });
 
     await browser.close();
@@ -180,7 +173,6 @@ async function scrapeCategory(category, retry = 0) {
       return scrapeCategory(category, retry + 1);
     }
 
-    await sendErrorAlert(err);
     throw err;
   }
 }
@@ -197,90 +189,109 @@ function calculateDiff(oldCount, newCount) {
 // ================= MAIN =================
 
 async function runOnce() {
-  if (isRunning) {
-    console.log("⏳ Previous run still active, skipping...");
-    return;
-  }
+  console.log("🚀 STOCK MONITOR RUN");
 
-  isRunning = true;
+  const snapshot = loadSnapshot();
+  const newSnapshot = {};
 
-  try {
-    console.log("🚀 STOCK MONITOR RUN");
+  let menSection = "";
+  let filteredSection = "";
+  let pincodeSection = "";
 
-    const snapshot = loadSnapshot();
-    const newSnapshot = {};
-    const sections = [];
+  let filteredLinks = [];
 
-    for (const category of CONFIG.categories) {
-      const current = await scrapeCategory(category);
-      const previous = snapshot[category.key];
+  for (const category of CONFIG.categories) {
+    const current = await scrapeCategory(category);
+    const previous = snapshot[category.key];
 
-      let added = 0;
-      let removed = 0;
-      let newLinks = [];
+    let added = 0;
+    let removed = 0;
 
-      if (previous?.totalItems !== undefined) {
-        const diff = calculateDiff(
-          previous.totalItems,
-          current.totalItems
-        );
-        added = diff.added;
-        removed = diff.removed;
-      }
+    if (previous?.totalItems !== undefined) {
+      const diff = calculateDiff(
+        previous.totalItems,
+        current.totalItems
+      );
+      added = diff.added;
+      removed = diff.removed;
+    }
 
-      // Detect new product links only for FILTERED category
-      if (category.key === "MEN_FILTERED" && previous?.links) {
-        const oldSet = new Set(previous.links);
-        newLinks = (current.links || []).filter(
-          (link) => !oldSet.has(link)
-        );
-      }
+    newSnapshot[category.key] = {
+      totalItems: current.totalItems,
+      links: current.links,
+      time: Date.now(),
+    };
 
-      newSnapshot[category.key] = {
-        totalItems: current.totalItems,
-        links: current.links || [],
-        time: Date.now(),
-      };
-
-      let sectionText = `🔹 ${category.label}
+    // -------- MEN ALL --------
+    if (category.key === "MEN_ALL") {
+      menSection = `1️⃣ MEN (All Products)
 Total: ${current.totalItems}
 Added: +${added}
 Removed: -${removed}`;
-
-      if (
-        category.key === "MEN_FILTERED" &&
-        newLinks.length > 0
-      ) {
-        sectionText +=
-          "\n\n🆕 New Products:\n" +
-          newLinks
-            .slice(0, CONFIG.maxLinksPerAlert)
-            .map((l) => `• ${l}`)
-            .join("\n");
-      }
-
-      sections.push(sectionText);
     }
 
-    saveSnapshot(newSnapshot);
+    // -------- MEN FILTERED --------
+    if (category.key === "MEN_FILTERED") {
+      filteredLinks = current.links || [];
 
-    const time = new Date().toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata",
-    });
+      const topLinks = filteredLinks
+        .slice(0, CONFIG.maxFilteredLinks)
+        .map((l) => `• ${l}`)
+        .join("\n");
 
-    const message = `📦 SHEIN STOCK UPDATE
+      filteredSection = `2️⃣ MEN (Filtered)
+Total: ${current.totalItems}
+Added: +${added}
+Removed: -${removed}
 
-${sections.join("\n\n")}
+🔗 Top ${CONFIG.maxFilteredLinks} Links:
+${topLinks || "No links found"}`;
+    }
+  }
+
+  // ================= PINCODE DELIVERABLE =================
+
+  const deliverableLinks = [];
+
+  for (const link of filteredLinks) {
+    const productCode = extractProductCode(link);
+    if (!productCode) continue;
+
+    const apiData = await checkPincodeAvailability(productCode);
+
+    if (isDeliverable(apiData)) {
+      deliverableLinks.push(link);
+    }
+
+    // small delay to avoid hammering API
+    await new Promise((r) => setTimeout(r, 300));
+  }
+
+  pincodeSection = `3️⃣ PINCODE DELIVERABLE PRODUCTS (Pincode: ${CONFIG.pincode})
+
+${
+  deliverableLinks.length > 0
+    ? deliverableLinks.map((l) => `• ${l}`).join("\n")
+    : "❌ No deliverable products found"
+}`;
+
+  saveSnapshot(newSnapshot);
+
+  const time = new Date().toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+  });
+
+  const message = `📦 SHEIN STOCK UPDATE
+
+${menSection}
+
+${filteredSection}
+
+${pincodeSection}
 
 Updated: ${time}`;
 
-    await sendTelegram(message);
-  } catch (err) {
-    console.error("Run failed:", err.message);
-    await sendErrorAlert(err);
-  } finally {
-    isRunning = false;
-  }
+  await sendTelegram(message);
 }
 
 // ================= SCHEDULER =================
@@ -288,5 +299,5 @@ Updated: ${time}`;
 // Run immediately
 runOnce();
 
-// Run every 10 minutes
-setInterval(runOnce, 10 * 60 * 1000);
+// Run every 5 minutes
+setInterval(runOnce, 5 * 60 * 1000);
