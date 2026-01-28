@@ -29,8 +29,8 @@ const CONFIG = {
     },
     {
       key: "MEN_FILTERED",
-      label: "MEN (L, XL, 28, 30, 32)",
-      url: "https://sheinindia.in/sheinverse/c/sverse-5939-37961?query=%3Arelevance%3Agenderfilter%3AMen%3Averticalsizegroupformat%3AL%3Averticalsizegroupformat%3AXL%3Averticalsizegroupformat%3A28%3Averticalsizegroupformat%3A30%3Averticalsizegroupformat%3A32&gridColumns=5",
+      label: "MEN (L, XXL, 32, 34, 38)",
+      url: "https://sheinindia.in/sheinverse/c/sverse-5939-37961?query=%3Arelevance%3Agenderfilter%3AMen%3Averticalsizegroupformat%3AL%3Averticalsizegroupformat%3A32%3Averticalsizegroupformat%3A34%3Averticalsizegroupformat%3AXXL%3Averticalsizegroupformat%3A38&gridColumns=5",
     },
   ],
 
