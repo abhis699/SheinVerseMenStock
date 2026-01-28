@@ -5,19 +5,6 @@ const axios = require("axios");
 const fs = require("fs");
 const express = require("express");
 
-// ================= KEEP ALIVE SERVER =================
-
-const app = express();
-const PORT = process.env.PORT || 10000;
-
-app.get("/", (req, res) => {
-  res.send("Shein Stock Bot Running");
-});
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log("✅ Keep-alive server running on port", PORT);
-});
-
 // ================= CONFIG =================
 
 const CONFIG = {
