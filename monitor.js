@@ -39,7 +39,7 @@ const CONFIG = {
 
   snapshotFile: "stock.json",
 
-  notifyThreshold: 60,      // 🔥 MEN ALL threshold
+  notifyThreshold: 50,          // 🔥 SEND MSG IF MEN ALL >= 50
   normalUpdateLinks: 10,
 
   scrapeCooldownMs: 4000,
@@ -134,7 +134,6 @@ async function runOnce() {
   let filteredSection = "";
 
   let menAllTotal = 0;
-  let filteredTotal = 0;
   let newlyAddedFilteredLinks = [];
 
   for (const category of CONFIG.categories) {
@@ -160,8 +159,6 @@ Removed: -${removed}`;
     }
 
     if (category.key === "MEN_FILTERED") {
-      filteredTotal = current.totalItems;
-
       newlyAddedFilteredLinks = current.links.filter(
         (l) => !previous.links.includes(l)
       );
@@ -175,19 +172,15 @@ Removed: -${removed}`;
     await new Promise((r) => setTimeout(r, CONFIG.scrapeCooldownMs));
   }
 
-  // ================= THRESHOLD CHECK (MEN ALL) =================
+  // ================= SIMPLE NOTIFY LOGIC =================
 
-  const prevMenAll = snapshot?.MEN_ALL?.totalItems || 0;
+  const shouldNotify = menAllTotal >= CONFIG.notifyThreshold;
 
-  const crossedThreshold =
-    prevMenAll < CONFIG.notifyThreshold &&
-    menAllTotal >= CONFIG.notifyThreshold;
+  console.log("📊 MEN ALL total:", menAllTotal);
+  console.log("📢 Notify threshold:", CONFIG.notifyThreshold);
+  console.log("🚦 Should notify?", shouldNotify);
 
-  console.log("📊 MEN ALL previous:", prevMenAll);
-  console.log("📊 MEN ALL current:", menAllTotal);
-  console.log("🚦 Threshold crossed?", crossedThreshold);
-
-  if (crossedThreshold) {
+  if (shouldNotify) {
     const linksText = newlyAddedFilteredLinks
       .slice(0, CONFIG.normalUpdateLinks)
       .map((l) => `• ${l}`)
@@ -210,7 +203,7 @@ Updated: ${time}`;
 
     await sendTelegram(message);
   } else {
-    console.log("ℹ️ No Telegram sent — MEN stock threshold not crossed");
+    console.log("ℹ️ No Telegram sent — MEN stock below threshold");
   }
 
   saveSnapshot(newSnapshot);
