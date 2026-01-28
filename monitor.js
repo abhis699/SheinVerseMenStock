@@ -292,9 +292,6 @@ ${menSection}
 
 ${filteredSection}
 
-🔗 Top ${CONFIG.normalUpdateLinks} Filtered Links:
-${normalLinks || "No links found"}
-
 Updated: ${time}`;
 
   await sendTelegram(message);
