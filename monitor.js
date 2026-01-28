@@ -29,8 +29,8 @@ const CONFIG = {
     },
     {
       key: "MEN_FILTERED",
-      label: "MEN (L, XXL, 32, 34, 38)",
-      url: "https://sheinindia.in/sheinverse/c/sverse-5939-37961?query=%3Arelevance%3Agenderfilter%3AMen%3Averticalsizegroupformat%3AL%3Averticalsizegroupformat%3A32%3Averticalsizegroupformat%3A34%3Averticalsizegroupformat%3AXXL%3Averticalsizegroupformat%3A38&gridColumns=5",
+      label: "MEN (Filtered)",
+      url: "https://sheinindia.in/sheinverse/c/sverse-5939-37961?query=%3Arelevance%3Agenderfilter%3AMen%3Averticalsizegroupformat%3AL%3Averticalsizegroupformat%3A32%3Averticalsizegroupformat%3A34%3Averticalsizegroupformat%3AXXL%3Averticalsizegroupformat%3A38%3Apricerange%3ARs.500-1000%3Apricerange%3ABelow%20Rs.500&gridColumns=5",
     },
   ],
 
@@ -39,34 +39,24 @@ const CONFIG = {
 
   snapshotFile: "stock.json",
 
-  maxRetries: 2,
-  retryDelay: 5000,
-
+  notifyThreshold: 60,      // 🔥 MEN ALL threshold
   normalUpdateLinks: 10,
-  alertThreshold: 30,
-  alertLinksCount: 15,
 
-  scrapeCooldownMs: 4000,   // 🧠 cooldown between browser launches
+  scrapeCooldownMs: 4000,
 };
 
-// ================= TELEGRAM (AUTO SPLIT SAFE) =================
+// ================= TELEGRAM =================
 
 async function sendTelegram(text) {
   const url = `https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`;
   const MAX_LEN = 3800;
 
-  const chunks = [];
   for (let i = 0; i < text.length; i += MAX_LEN) {
-    chunks.push(text.slice(i, i + MAX_LEN));
-  }
-
-  for (const chunk of chunks) {
     await axios.post(url, {
       chat_id: CONFIG.telegramChatId,
-      text: chunk,
+      text: text.slice(i, i + MAX_LEN),
       disable_web_page_preview: true,
     });
-
     await new Promise((r) => setTimeout(r, 300));
   }
 
@@ -76,12 +66,8 @@ async function sendTelegram(text) {
 // ================= SNAPSHOT =================
 
 function loadSnapshot() {
-  try {
-    if (!fs.existsSync(CONFIG.snapshotFile)) return {};
-    return JSON.parse(fs.readFileSync(CONFIG.snapshotFile, "utf8"));
-  } catch {
-    return {};
-  }
+  if (!fs.existsSync(CONFIG.snapshotFile)) return {};
+  return JSON.parse(fs.readFileSync(CONFIG.snapshotFile, "utf8"));
 }
 
 function saveSnapshot(data) {
@@ -90,91 +76,50 @@ function saveSnapshot(data) {
 
 // ================= SCRAPER =================
 
-async function scrapeCategory(category, retry = 0) {
-  let browser;
+async function scrapeCategory(category) {
+  const browser = await puppeteer.launch({
+    headless: "new",
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
 
-  try {
-    browser = await puppeteer.launch({
-      headless: "new",
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-      ],
-    });
+  const page = await browser.newPage();
 
-    const page = await browser.newPage();
-
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
-    );
-
-    await page.setRequestInterception(true);
-    page.on("request", (req) => {
-      const type = req.resourceType();
-      if (["image", "font", "media", "stylesheet"].includes(type)) {
-        req.abort();
-      } else {
-        req.continue();
-      }
-    });
-
-    await page.setViewport({ width: 1200, height: 720 });
-
-    console.log(`🌐 Opening ${category.label}`);
-    await page.goto(category.url, {
-      waitUntil: "domcontentloaded",
-      timeout: 90000,
-    });
-
-    await page.waitForSelector("a.rilrtl-products-list__link", {
-      timeout: 45000,
-    });
-
-    await new Promise((r) => setTimeout(r, 3000));
-
-    const data = await page.evaluate(() => {
-      const countText =
-        document.querySelector(".length strong")?.innerText || "";
-      const totalItems = parseInt(
-        countText.match(/\d+/)?.[0] || "0"
-      );
-
-      const links = Array.from(
-        document.querySelectorAll("a.rilrtl-products-list__link")
-      ).map((a) => a.href);
-
-      return { totalItems, links };
-    });
-
-    await browser.close();
-
-    if (!data.totalItems) throw new Error("No products detected");
-
-    return data;
-  } catch (err) {
-    if (browser) await browser.close().catch(() => {});
-    console.error(
-      `❌ ${category.key} scrape failed (${retry + 1}):`,
-      err.message
-    );
-
-    if (retry < CONFIG.maxRetries) {
-      await new Promise((r) => setTimeout(r, CONFIG.retryDelay));
-      return scrapeCategory(category, retry + 1);
+  await page.setRequestInterception(true);
+  page.on("request", (req) => {
+    if (["image", "font", "media", "stylesheet"].includes(req.resourceType())) {
+      req.abort();
+    } else {
+      req.continue();
     }
+  });
 
-    throw err;
-  }
-}
+  console.log(`🌐 Opening ${category.label}`);
 
-// ================= DIFF =================
+  await page.goto(category.url, {
+    waitUntil: "domcontentloaded",
+    timeout: 90000,
+  });
 
-function calculateDiff(oldCount, newCount) {
-  return {
-    added: Math.max(0, newCount - oldCount),
-    removed: Math.max(0, oldCount - newCount),
-  };
+  await page.waitForSelector("a.rilrtl-products-list__link", {
+    timeout: 45000,
+  });
+
+  await new Promise((r) => setTimeout(r, 3000));
+
+  const data = await page.evaluate(() => {
+    const countText =
+      document.querySelector(".length strong")?.innerText || "";
+    const totalItems = parseInt(countText.match(/\d+/)?.[0] || "0");
+
+    const links = Array.from(
+      document.querySelectorAll("a.rilrtl-products-list__link")
+    ).map((a) => a.href);
+
+    return { totalItems, links };
+  });
+
+  await browser.close();
+  return data;
 }
 
 // ================= MAIN =================
@@ -188,49 +133,16 @@ async function runOnce() {
   let menSection = "";
   let filteredSection = "";
 
-  let filteredLinks = [];
+  let menAllTotal = 0;
   let filteredTotal = 0;
-
-  // ================= SEQUENTIAL SCRAPE =================
-
-  const results = [];
+  let newlyAddedFilteredLinks = [];
 
   for (const category of CONFIG.categories) {
-    try {
-      const data = await scrapeCategory(category);
-      results.push({ status: "fulfilled", value: data });
-    } catch (err) {
-      results.push({ status: "rejected", reason: err });
-    }
+    const current = await scrapeCategory(category);
+    const previous = snapshot[category.key] || { totalItems: 0, links: [] };
 
-    // Allow memory to settle
-    await new Promise((r) =>
-      setTimeout(r, CONFIG.scrapeCooldownMs)
-    );
-  }
-
-  CONFIG.categories.forEach((category, index) => {
-    const result = results[index];
-
-    if (result.status !== "fulfilled") {
-      console.error(`❌ ${category.key} failed this cycle`);
-      return;
-    }
-
-    const current = result.value;
-    const previous = snapshot[category.key];
-
-    let added = 0;
-    let removed = 0;
-
-    if (previous?.totalItems !== undefined) {
-      const diff = calculateDiff(
-        previous.totalItems,
-        current.totalItems
-      );
-      added = diff.added;
-      removed = diff.removed;
-    }
+    const added = Math.max(0, current.totalItems - previous.totalItems);
+    const removed = Math.max(0, previous.totalItems - current.totalItems);
 
     newSnapshot[category.key] = {
       totalItems: current.totalItems,
@@ -239,6 +151,8 @@ async function runOnce() {
     };
 
     if (category.key === "MEN_ALL") {
+      menAllTotal = current.totalItems;
+
       menSection = `1️⃣ MEN (All Products)
 Total: ${current.totalItems}
 Added: +${added}
@@ -246,74 +160,63 @@ Removed: -${removed}`;
     }
 
     if (category.key === "MEN_FILTERED") {
-      filteredLinks = current.links || [];
       filteredTotal = current.totalItems;
+
+      newlyAddedFilteredLinks = current.links.filter(
+        (l) => !previous.links.includes(l)
+      );
 
       filteredSection = `2️⃣ MEN (Filtered)
 Total: ${current.totalItems}
 Added: +${added}
 Removed: -${removed}`;
     }
-  });
 
-  // ================= 🚨 ALERT =================
+    await new Promise((r) => setTimeout(r, CONFIG.scrapeCooldownMs));
+  }
 
-  const previousFiltered = snapshot?.MEN_FILTERED?.totalItems || 0;
+  // ================= THRESHOLD CHECK (MEN ALL) =================
 
-  const crossedUp =
-    previousFiltered < CONFIG.alertThreshold &&
-    filteredTotal >= CONFIG.alertThreshold;
+  const prevMenAll = snapshot?.MEN_ALL?.totalItems || 0;
 
-  if (crossedUp) {
-    const alertLinks = filteredLinks
-      .slice(0, CONFIG.alertLinksCount)
+  const crossedThreshold =
+    prevMenAll < CONFIG.notifyThreshold &&
+    menAllTotal >= CONFIG.notifyThreshold;
+
+  console.log("📊 MEN ALL previous:", prevMenAll);
+  console.log("📊 MEN ALL current:", menAllTotal);
+  console.log("🚦 Threshold crossed?", crossedThreshold);
+
+  if (crossedThreshold) {
+    const linksText = newlyAddedFilteredLinks
+      .slice(0, CONFIG.normalUpdateLinks)
       .map((l) => `• ${l}`)
       .join("\n");
 
-    const alertMsg = `🚨🚨🚨 FILTERED STOCK ALERT 🚨🚨🚨
-
-MEN Filtered stock crossed ${CONFIG.alertThreshold}+
-
-Current Stock: ${filteredTotal}
-
-🔥 Top ${CONFIG.alertLinksCount} Products:
-${alertLinks || "No links found"}
-
-⏰ ${new Date().toLocaleString("en-IN", {
+    const time = new Date().toLocaleString("en-IN", {
       timeZone: "Asia/Kolkata",
-    })}`;
+    });
 
-    await sendTelegram(alertMsg);
-  }
-
-  saveSnapshot(newSnapshot);
-
-  // ================= NORMAL UPDATE =================
-
-  const normalLinks = filteredLinks
-    .slice(0, CONFIG.normalUpdateLinks)
-    .map((l) => `• ${l}`)
-    .join("\n");
-
-  const time = new Date().toLocaleString("en-IN", {
-    timeZone: "Asia/Kolkata",
-  });
-
-  const message = `📦 SHEIN STOCK UPDATE
+    const message = `📦 SHEIN STOCK
 
 ${menSection}
 
 ${filteredSection}
 
-🔗 Top ${CONFIG.normalUpdateLinks} Filtered Links:
-${normalLinks || "No links found"}
+🔗 Top ${CONFIG.normalUpdateLinks} Newly Added Filtered Links:
+${linksText || "No new links found"}
 
 Updated: ${time}`;
 
-  await sendTelegram(message);
+    await sendTelegram(message);
+  } else {
+    console.log("ℹ️ No Telegram sent — MEN stock threshold not crossed");
+  }
+
+  saveSnapshot(newSnapshot);
 }
 
 // ================= SCHEDULER =================
 
 runOnce();
-setInterval(runOnce, 6 * 60 * 1000);   // ⏳ every 6 minutes
+setInterval(runOnce, 6 * 60 * 1000);
